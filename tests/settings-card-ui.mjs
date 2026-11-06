@@ -101,8 +101,10 @@ const ctx = {
   },
   locale: {
     getLocale: () => ({ active: 'en', locales: [], revision: 0 }),
-    register: (_namespace, next) => {
-      dictionaries = next;
+    register: (_namespace, next, dict) => {
+      dictionaries ??= {};
+      if (typeof next === 'string') dictionaries[next] = dict;
+      else Object.assign(dictionaries, next);
       return () => {};
     },
   },
@@ -131,7 +133,7 @@ function render(locale) {
 }
 
 
-for (const locale of ['en', 'zh']) {
+for (const locale of ['en', 'zh', 'ru']) {
   const html = render(locale);
   assert.doesNotMatch(html, /dshAcHeaderFrame/, 'the colored header banner stays removed');
   assert.match(html, /role="tablist"/);
@@ -153,7 +155,7 @@ const expected = Object.entries(face.hooks.autoContinueSettingsCard.getSnapshot(
 const visible = [];
 for (const category of ['general', 'recovery', 'startup', 'prompts', 'safety', 'status']) {
   activeCategory = category;
-  for (const locale of ['en', 'zh']) {
+  for (const locale of ['en', 'zh', 'ru']) {
     const html = render(locale);
     assert.match(html, new RegExp(`data-category="${category}"[^>]*aria-selected="true"`));
     assert.ok(html.includes(dictionaries[locale][`category.${category}.title`]));
@@ -178,6 +180,7 @@ assert.match(render('en'), /Latest reason: No visible output/);
 assert.match(render('en'), /session-&lt;example&gt;/, 'session identifiers are rendered as text');
 assert.match(render('en'), /<time[^>]*dateTime=/);
 assert.match(render('zh'), /最近原因: 无可见输出/);
+assert.match(render('ru'), /Последняя причина: Нет видимого вывода/);
 pushBridge({ type: 'state' });
 for (let i = 0; i < 8; i++) await Promise.resolve();
 assert.match(render('en'), /No recovery attempts yet/, 'older host payloads remain compatible');

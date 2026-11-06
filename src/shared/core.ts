@@ -7,10 +7,13 @@
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session/types';
 
 /** Supported UI/config locales; missing and unsupported values use English. */
-export type AutoContinueLocale = 'en' | 'zh';
+export type AutoContinueLocale = 'en' | 'zh' | 'ru';
 
 export function resolveLocale(locale: unknown): AutoContinueLocale {
-  return typeof locale === 'string' && /^zh(?:-|$)/i.test(locale) ? 'zh' : 'en';
+  if (typeof locale !== 'string') return 'en';
+  if (/^zh(?:-|$)/i.test(locale)) return 'zh';
+  if (/^ru(?:-|$)/i.test(locale)) return 'ru';
+  return 'en';
 }
 
 export type SessionMode = 'default' | 'off' | 'recover' | 'loop';
@@ -57,6 +60,21 @@ export const LOCALIZED_TEXT_DEFAULTS = {
       '(The previous tool "{tool}" completed successfully. Result: {result}; do not run it again. Continue from there.)',
     loopText:
       '(You may be stuck in a loop. Stop repeating the last action and continue with a different approach.)',
+  },
+  ru: {
+    continueText: 'Продолжай',
+    continueTextMaxTokens: 'Продолжай',
+    continueTextSilent:
+      'Продолжай. Предыдущий ход закончился только внутренним рассуждением: ни ответа, ни вызова инструмента, поэтому пользователь ничего не увидел. Каждый ход должен заканчиваться вызовом инструмента или видимым ответом.',
+    continueTextLoop: 'Продолжай',
+    continueTextInterrupted:
+      'Продолжай. Хост перезапустился, пока предыдущий ход ещё выполнялся; вызовы инструментов, незавершённые на момент перезапуска, записаны с неизвестным результатом. Продолжай с места остановки, проверяя внешнее состояние перед повтором действий с возможными побочными эффектами.',
+    guardPendingText:
+      '(Предыдущий инструмент «{tool}», возможно, не завершился. Проверь его состояние перед продолжением и не запускай его повторно.)',
+    guardDoneText:
+      '(Предыдущий инструмент «{tool}» завершился успешно. Результат: {result}; не запускай его повторно, продолжай с этого места.)',
+    loopText:
+      '(Похоже, ты застрял в цикле. Перестань повторять последнее действие и продолжай другим способом.)',
   },
 } as const satisfies Record<AutoContinueLocale, Record<string, string>>;
 

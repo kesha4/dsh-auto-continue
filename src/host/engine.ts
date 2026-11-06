@@ -74,6 +74,19 @@ const NOTICE_COPY = {
     stoppedBody: (sessionId: SessionId, count: number) =>
       `${sessionId}: ${count} consecutive failures; manual intervention required`,
   },
+  ru: {
+    notContinuedTitle: 'dsh-auto-continue: продолжение не выполнено',
+    permanentErrorBody: (sessionId: SessionId, summary: string) =>
+      `${sessionId}: постоянная ошибка ${summary}; нужно вмешательство вручную`,
+    resumeAction: 'Продолжить сейчас',
+    pauseAction: 'Приостановить сессию на 1 час',
+    continuedTitle: 'dsh-auto-continue: продолжено автоматически',
+    continuedBody: (sessionId: SessionId, text: string, count: number) =>
+      `${sessionId}: отправлено «${text}» (попытка подряд: ${count})`,
+    stoppedTitle: 'dsh-auto-continue: авто-продолжение остановлено',
+    stoppedBody: (sessionId: SessionId, count: number) =>
+      `${sessionId}: сбоев подряд: ${count}; нужно вмешательство вручную`,
+  },
 } as const satisfies Record<AutoContinueLocale, Record<string, unknown>>;
 
 /** Durable cancel identity reserved for this plugin's loop guard. */

@@ -6,7 +6,7 @@
  */
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types';
 /** Supported UI/config locales; missing and unsupported values use English. */
-export type AutoContinueLocale = 'en' | 'zh';
+export type AutoContinueLocale = 'en' | 'zh' | 'ru';
 export declare function resolveLocale(locale: unknown): AutoContinueLocale;
 export type SessionMode = 'default' | 'off' | 'recover' | 'loop';
 export interface SessionPolicy {
@@ -38,6 +38,16 @@ export declare const LOCALIZED_TEXT_DEFAULTS: {
         readonly guardPendingText: "(The previous tool \"{tool}\" may not have completed. Check its state before continuing and do not run it again.)";
         readonly guardDoneText: "(The previous tool \"{tool}\" completed successfully. Result: {result}; do not run it again. Continue from there.)";
         readonly loopText: "(You may be stuck in a loop. Stop repeating the last action and continue with a different approach.)";
+    };
+    readonly ru: {
+        readonly continueText: "Продолжай";
+        readonly continueTextMaxTokens: "Продолжай";
+        readonly continueTextSilent: "Продолжай. Предыдущий ход закончился только внутренним рассуждением: ни ответа, ни вызова инструмента, поэтому пользователь ничего не увидел. Каждый ход должен заканчиваться вызовом инструмента или видимым ответом.";
+        readonly continueTextLoop: "Продолжай";
+        readonly continueTextInterrupted: "Продолжай. Хост перезапустился, пока предыдущий ход ещё выполнялся; вызовы инструментов, незавершённые на момент перезапуска, записаны с неизвестным результатом. Продолжай с места остановки, проверяя внешнее состояние перед повтором действий с возможными побочными эффектами.";
+        readonly guardPendingText: "(Предыдущий инструмент «{tool}», возможно, не завершился. Проверь его состояние перед продолжением и не запускай его повторно.)";
+        readonly guardDoneText: "(Предыдущий инструмент «{tool}» завершился успешно. Результат: {result}; не запускай его повторно, продолжай с этого места.)";
+        readonly loopText: "(Похоже, ты застрял в цикле. Перестань повторять последнее действие и продолжай другим способом.)";
     };
 };
 /** The `auto-continue` settings section (all fields optional on the wire; the host schema carries defaults). */

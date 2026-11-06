@@ -88,7 +88,12 @@ const ctx = {
   effect(start) { return start(); },
   locale: {
     getLocale: () => ({ active: 'en', locales: [], revision: 0 }),
-    register(_namespace, next) { dictionaries = next; return () => {}; },
+    register(_namespace, next, dict) {
+      dictionaries ??= {};
+      if (typeof next === 'string') dictionaries[next] = dict;
+      else Object.assign(dictionaries, next);
+      return () => {};
+    },
   },
   on: () => () => {},
   settingsScope: { bind: () => scope },

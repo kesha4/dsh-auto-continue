@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Russian (`ru` / `ru-*`) localization: the settings card, composer switch and mode menu, browser notifications, built-in continue / guard / loop texts, and the plugin's own metadata. `zh`/`zh-*` and every other locale (including English) keep their existing strings and fallbacks unchanged.
+
 ## [0.17.3](https://github.com/HsiangNianian/dsh-auto-continue/releases/tag/v0.17.3) — 2026-11-02
 
 ### Fixed
