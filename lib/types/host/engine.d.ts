@@ -91,19 +91,26 @@ export declare class AutoContinueRunner {
     private isSubagent;
     /** Header origin, cached set or state flag; for paths that only have the session id. */
     private isSubagentSession;
-    /** Direct parent id, read from the live header when the cache has not seen this session yet. */
+    /**
+     * Direct subagent parent id. DSH stores fork lineage in the same
+     * `header.parentSession` field, so only a session whose header origin is
+     * `subagent` may be followed upward: an ordinary ancestor (the visible main
+     * conversation, even a forked one) is the top of the recovery lineage.
+     */
     private parentOf;
-    /** Topmost ancestor of a subagent session: the visible main conversation. */
+    /** Topmost subagent ancestor, stopping at the ordinary main conversation; fork lineage is not followed. */
     private lineageRoot;
     /** Explicit session mode stored for this exact id, if the user gave one. */
     private explicitMode;
     /** A subagent's mode: its own explicit choice, else the main conversation's choice, else the profile default. */
     private subagentMode;
+    /** Whether the setting and the inherited main-chat mode allow live recovery for this child. */
+    private subagentRecoveryEnabled;
     /** Mark a child session; drop only queued sends that its effective policy no longer allows. */
     private markSubagent;
     /** Pause deadline, including the parents' "pause this session 1h" for subagents. */
     private effectivePauseUntil;
-    /** Whether this session sits below `ancestorId` in the subagent lineage. */
+    /** Whether this session sits below `ancestorId` in the subagent lineage (never fork lineage). */
     private isDescendantOf;
     /**
      * 事件入口(host 单实例): 预处理工具调用/结果/模型消息(护栏与循环信号),

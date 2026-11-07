@@ -417,7 +417,7 @@ export class AutoContinueRunner {
       // conversation (an explicit mode stored for the child wins). It never runs
       // the autonomous loop or the loop guard, and the startup scan keeps leaving
       // it to its parent: those three stay parent-only.
-      const enabled = config.resumeSubagentSessions && this.subagentMode(sessionId) !== 'off';
+      const enabled = this.subagentRecoveryEnabled(sessionId);
       return {
         ...config,
         paused: config.paused || !enabled,
@@ -481,6 +481,8 @@ export class AutoContinueRunner {
       if (state.cooldownRetryTimer !== undefined) clearTimeout(state.cooldownRetryTimer);
     }
     this.states.clear();
+    this.parents.clear();
+    this.subagentSessions.clear();
   }
 
   private state(sessionId: SessionId): SessionState {
@@ -523,17 +525,28 @@ export class AutoContinueRunner {
     return true;
   }
 
-  /** Direct parent id, read from the live header when the cache has not seen this session yet. */
+  /**
+   * Direct subagent parent id. DSH stores fork lineage in the same
+   * `header.parentSession` field, so only a session whose header origin is
+   * `subagent` may be followed upward: an ordinary ancestor (the visible main
+   * conversation, even a forked one) is the top of the recovery lineage.
+   */
   private parentOf(sessionId: SessionId): SessionId | undefined {
     if (this.parents.has(sessionId)) return this.parents.get(sessionId);
     const header = this.ctx.agents.get(sessionId)?.session?.header;
-    const parent = header?.parentSession;
-    if (header?.origin === 'subagent') this.noteSubagent(sessionId, parent);
-    else this.parents.set(sessionId, parent);
+    // No live header yet: leave the lineage unresolved so a later live agent
+    // with the same id can still provide it instead of caching "no parent".
+    if (header === undefined) return undefined;
+    if (header.origin !== 'subagent') {
+      this.parents.set(sessionId, undefined); // known ordinary: top of the lineage
+      return undefined;
+    }
+    const parent = header.parentSession;
+    this.noteSubagent(sessionId, parent);
     return parent;
   }
 
-  /** Topmost ancestor of a subagent session: the visible main conversation. */
+  /** Topmost subagent ancestor, stopping at the ordinary main conversation; fork lineage is not followed. */
   private lineageRoot(sessionId: SessionId): SessionId {
     const seen = new Set<SessionId>([sessionId]);
     let current = sessionId;
@@ -558,18 +571,25 @@ export class AutoContinueRunner {
     return this.explicitMode(sessionId) ?? this.explicitMode(this.lineageRoot(sessionId)) ?? 'default';
   }
 
+  /** Whether the setting and the inherited main-chat mode allow live recovery for this child. */
+  private subagentRecoveryEnabled(sessionId: SessionId): boolean {
+    return this.getConfig().resumeSubagentSessions && this.subagentMode(sessionId) !== 'off';
+  }
+
   /** Mark a child session; drop only queued sends that its effective policy no longer allows. */
   private markSubagent(sessionId: SessionId, state: SessionState, parentSession?: SessionId): void {
     const first = !state.subagent;
     state.subagent = true;
     this.noteSubagent(sessionId, parentSession);
-    if (first && this.sessionConfig(sessionId).paused) this.cancelPending(sessionId, '子代理会话');
+    if (first && !this.subagentRecoveryEnabled(sessionId)) this.cancelPending(sessionId, '子代理会话');
   }
 
   /** Pause deadline, including the parents' "pause this session 1h" for subagents. */
   private effectivePauseUntil(sessionId: SessionId): number {
     let until = this.pauseUntil.get(sessionId) ?? 0;
     if (!this.isSubagentSession(sessionId)) return until;
+    // parentOf() only follows subagent-origin sessions, so fork lineage of the
+    // main conversation is never treated as a parent for pause purposes.
     const seen = new Set<SessionId>([sessionId]);
     let current: SessionId | undefined = sessionId;
     for (let depth = 0; depth < 32; depth += 1) {
@@ -581,7 +601,7 @@ export class AutoContinueRunner {
     return until;
   }
 
-  /** Whether this session sits below `ancestorId` in the subagent lineage. */
+  /** Whether this session sits below `ancestorId` in the subagent lineage (never fork lineage). */
   private isDescendantOf(sessionId: SessionId, ancestorId: SessionId): boolean {
     const seen = new Set<SessionId>([sessionId]);
     let current: SessionId | undefined = sessionId;
@@ -1049,8 +1069,10 @@ export class AutoContinueRunner {
     const config = this.getConfig();
     if (this.isSubagentSession(sessionId)) {
       // Subagents inherit only the main conversation's enabled/off decision; an
-      // Off parent or the disabled setting means no live recovery at all.
-      if (this.sessionConfig(sessionId).paused) return;
+      // Off parent or the disabled setting means no live recovery at all. The
+      // global pause is not checked here, so diagnostics for permanent errors
+      // match ordinary sessions while paused.
+      if (!this.subagentRecoveryEnabled(sessionId)) return;
     } else if (sessionMode(config.sessionModes, sessionId) === 'off') return;
     if (config.classify && !isTransientFailure(failure, config.retryableErrorPatterns)) {
       const copy = NOTICE_COPY[config.locale];

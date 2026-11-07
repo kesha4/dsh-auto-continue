@@ -13,6 +13,10 @@
  *   1a.7. 暂停父会话 → 取消排队中的子代理续跑并暂停其自动恢复
  *   1a.8. 嵌套子代理按顶层主会话策略继承(中间节点的 off 不覆盖叶子)
  *   1a.9. 启动扫描仍跳过子代理会话(live only)
+ *   1a.10. fork 血缘: fork 源的 off 不泄漏给 forked main chat 的子代理, 但 forked main chat 自身 off 生效
+ *   1a.11. pause1h(fork 源) 不取消/不抑制 forked main chat 及其子代理; pause1h(真正主会话) 仍抑制子代理
+ *   1a.12. 父会话尚未 live 时不写入负缓存 → 后续注册后重新解析血缘(顶层 off 生效, 只曾发送一次)
+ *   1a.13. 排队后关闭 resumeSubagentSessions → 取消已排队的子代理续跑
  *   1b. English locale → 默认发送 "Continue"
  *   1c. 本地化只替换默认值, 不覆盖用户自定义文本
  *   1d. 未支持的 locale → 回落中文
@@ -769,6 +773,130 @@ const reasoningOnlyMsg = (seq, turn = 1) => ({
   check('启动扫描仍不恢复子代理会话', child.followups.length === 0);
   check('启动扫描仍恢复普通会话', ordinary.followups.length === 1);
   await sleep(50);
+}
+
+// ---------- 测试 1a.10: fork 血缘不被当作子代理血缘 ----------
+{
+  console.log('测试 1a.10: fork 源的 off 不泄漏; forked main chat 自身的 off 仍禁用它子代理');
+  // DSH 把 fork 血缘也存在 header.parentSession 里: F 是普通 fork 源, M 是普通 fork 出的主会话。
+  const host = startPlugin({
+    scanOnBoot: false,
+    graceMs: 10,
+    cooldownMs: 0,
+    sessionModes: { 'fork-source': 'off' },
+  });
+  host.makeAgent('fork-source');
+  host.makeAgent('fork-main', { parentSession: 'fork-source' });
+  const child = host.makeAgent('fork-child', { origin: 'subagent', parentSession: 'fork-main' });
+  await sleep(20);
+  host.emit(child.session, turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  await sleep(60);
+  check('fork 源的 off 不影响 forked main chat 的子代理恢复', child.followups.length === 1);
+
+  const offHost = startPlugin({
+    scanOnBoot: false,
+    graceMs: 10,
+    cooldownMs: 0,
+    sessionModes: { 'fork-main-2': 'off' },
+  });
+  offHost.makeAgent('fork-source-2');
+  offHost.makeAgent('fork-main-2', { parentSession: 'fork-source-2' });
+  const child2 = offHost.makeAgent('fork-child-2', {
+    origin: 'subagent',
+    parentSession: 'fork-main-2',
+  });
+  await sleep(20);
+  offHost.emit(child2.session, turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  await sleep(60);
+  check('forked main chat 自身的 off 仍禁用它子代理', child2.followups.length === 0);
+  await sleep(20);
+}
+
+// ---------- 测试 1a.11: pause1h 不沿 fork 血缘泄漏 ----------
+{
+  console.log('测试 1a.11: pause1h(fork 源) 不泄漏; pause1h(真正主会话) 仍抑制子代理');
+  const host = startPlugin({ scanOnBoot: false, graceMs: 200, cooldownMs: 0 });
+  const forkedMain = host.makeAgent('pause-fork-main', { parentSession: 'pause-fork-source' });
+  const forkedChild = host.makeAgent('pause-fork-child', {
+    origin: 'subagent',
+    parentSession: 'pause-fork-main',
+  });
+  await sleep(20);
+  host.emit(forkedMain.session, turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  host.emit(
+    forkedChild.session,
+    turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }),
+  );
+  const pausedSource = await postAction(host, { action: 'pause1h', sessionId: 'pause-fork-source' });
+  await sleep(350);
+  check(
+    'pause1h(fork 源) 不取消 forked main chat 的排队恢复',
+    pausedSource.ok === true && forkedMain.followups.length === 1,
+  );
+  check('pause1h(fork 源) 不取消 forked main chat 子代理的排队恢复', forkedChild.followups.length === 1);
+  host.emit(
+    forkedChild.session,
+    turnEnd(2, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }),
+  );
+  await sleep(350);
+  check('pause1h(fork 源) 也不抑制子代理后续自动恢复', forkedChild.followups.length === 2);
+
+  const realHost = startPlugin({ scanOnBoot: false, graceMs: 200, cooldownMs: 0 });
+  realHost.makeAgent('real-main');
+  const realChild = realHost.makeAgent('real-child', { origin: 'subagent', parentSession: 'real-main' });
+  await sleep(20);
+  realHost.emit(realChild.session, turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  const pausedMain = await postAction(realHost, { action: 'pause1h', sessionId: 'real-main' });
+  await sleep(350);
+  check('pause1h(真正主会话) 取消排队中的子代理续跑', pausedMain.ok === true && realChild.followups.length === 0);
+  realHost.emit(
+    realChild.session,
+    turnEnd(2, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }),
+  );
+  await sleep(350);
+  check('pause1h(真正主会话) 仍抑制子代理后续自动恢复', realChild.followups.length === 0);
+  await sleep(20);
+}
+
+// ---------- 测试 1a.12: 尚未 live 的父会话不得写入负缓存 ----------
+{
+  console.log('测试 1a.12: 父会话后注册 → 重新解析血缘, 不沿用「无父」负缓存');
+  const host = startPlugin({
+    scanOnBoot: false,
+    graceMs: 10,
+    cooldownMs: 0,
+    sessionModes: { 'stale-top': 'off' },
+  });
+  host.makeAgent('stale-top');
+  const leaf = host.makeAgent('stale-leaf', { origin: 'subagent', parentSession: 'stale-mid' });
+  await sleep(20);
+  host.emit(leaf.session, turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  await sleep(60);
+  check('父会话尚未 live 时子代理按默认策略恢复', leaf.followups.length === 1);
+  // stale-mid 之后才以 live subagent 身份出现(只进 registry, 不发事件); 顶层 main 为 off。
+  host.makeAgent('stale-mid', { origin: 'subagent', parentSession: 'stale-top' });
+  host.emit(leaf.session, turnEnd(2, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  await sleep(60);
+  check('后续重新解析血缘并应用顶层 off(总发送仍为 1)', leaf.followups.length === 1);
+  await sleep(20);
+}
+
+// ---------- 测试 1a.13: 排队后关闭 resumeSubagentSessions → 取消排队 ----------
+{
+  console.log('测试 1a.13: 排队后关闭 resumeSubagentSessions → 取消已排队的子代理续跑');
+  const host = startPlugin({ scanOnBoot: false, graceMs: 200, cooldownMs: 0 });
+  host.makeAgent('setting-main');
+  const child = host.makeAgent('setting-child', { origin: 'subagent', parentSession: 'setting-main' });
+  await sleep(20);
+  host.emit(child.session, turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  host.setConfig({ resumeSubagentSessions: false });
+  host.settingsChanged();
+  await sleep(350);
+  check('关闭设置取消已排队的子代理续跑', child.followups.length === 0);
+  host.emit(child.session, turnEnd(2, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  await sleep(350);
+  check('关闭设置后子代理不再实时恢复', child.followups.length === 0);
+  await sleep(20);
 }
 
 // ---------- 测试 1: turn/end error → 宽限期后自动发送 ----------
