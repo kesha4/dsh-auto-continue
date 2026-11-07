@@ -88,6 +88,8 @@ export interface AutoContinueSettings {
   continueTextMaxTokens?: string;
   /** Resume observed model activity that completes without visible output. */
   resumeSilentTurns?: boolean;
+  /** Resume interrupted subagent sessions when their main conversation has auto-continue enabled. Subagents never enter the autonomous loop. */
+  resumeSubagentSessions?: boolean;
   /** Autonomous mode: hand the thread back to the agent after every completed turn, looping until the user stops it. The consecutive-failure cap only throttles failures, never successful completions. */
   resumeCompletedTurns?: boolean;
   /** Text sent to resume a silent turn (same placeholders as `continueText`). */
@@ -156,6 +158,7 @@ export const DEFAULT_CONFIG: AutoContinueConfig = {
   locale: 'en',
   ...LOCALIZED_TEXT_DEFAULTS.en,
   resumeSilentTurns: true,
+  resumeSubagentSessions: true,
   resumeCompletedTurns: false,
   continueTextLoop: '',
   guardTools: true,
@@ -228,6 +231,7 @@ export function resolveConfig(section: AutoContinueSettings | undefined): AutoCo
     continueText: text,
     continueTextMaxTokens: maxTokensText,
     resumeSilentTurns: booleanOr(value.resumeSilentTurns, DEFAULT_CONFIG.resumeSilentTurns),
+    resumeSubagentSessions: booleanOr(value.resumeSubagentSessions, DEFAULT_CONFIG.resumeSubagentSessions),
     resumeCompletedTurns: booleanOr(value.resumeCompletedTurns, DEFAULT_CONFIG.resumeCompletedTurns),
     continueTextSilent: silentText,
     continueTextLoop: loopText,

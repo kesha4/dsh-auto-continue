@@ -87,6 +87,7 @@ export interface AutoContinueSettingsCardState extends CardShell {
   continueText: CardFieldState;
   continueTextMaxTokens: CardFieldState;
   resumeSilentTurns: CardFieldState;
+  resumeSubagentSessions: CardFieldState;
   resumeCompletedTurns: CardFieldState;
   continueTextLoop: CardFieldState;
   continueTextSilent: CardFieldState;
@@ -148,6 +149,7 @@ export class AutoContinueSettingsCardController {
       textField('continueText'),
       textField('continueTextMaxTokens'),
       booleanField('resumeSilentTurns'),
+      booleanField('resumeSubagentSessions'),
       booleanField('resumeCompletedTurns'),
       textField('continueTextLoop'),
       textField('continueTextSilent'),
@@ -190,6 +192,7 @@ export class AutoContinueSettingsCardController {
       continueText: this.form.field('continueText'),
       continueTextMaxTokens: this.form.field('continueTextMaxTokens'),
       resumeSilentTurns: this.form.field('resumeSilentTurns'),
+      resumeSubagentSessions: this.form.field('resumeSubagentSessions'),
       resumeCompletedTurns: this.form.field('resumeCompletedTurns'),
       continueTextLoop: this.form.field('continueTextLoop'),
       continueTextSilent: this.form.field('continueTextSilent'),
@@ -301,7 +304,7 @@ export function AutoContinueSettingsPage(props: AutoContinueSettingsCardProps) {
 
 type FieldName = Exclude<keyof AutoContinueSettingsCardState, keyof CardShell | 'enabled' | 'notificationFeedback'>;
 const groups = [
-  { id: 'general', fields: ['paused', 'showComposerToggle', 'resumeSilentTurns', 'resumeCompletedTurns', 'notify'] },
+  { id: 'general', fields: ['paused', 'showComposerToggle', 'resumeSilentTurns', 'resumeSubagentSessions', 'resumeCompletedTurns', 'notify'] },
   { id: 'recovery', fields: ['graceMs', 'cooldownMs', 'maxConsecutive', 'classify', 'retryableErrorPatterns', 'backoffFactor', 'backoffMaxMs'] },
   { id: 'startup', fields: ['scanOnBoot', 'scanLimit', 'freshMs'] },
   { id: 'prompts', fields: ['continueText', 'continueTextMaxTokens', 'continueTextSilent', 'continueTextInterrupted', 'continueTextLoop', 'guardPendingText', 'guardDoneText', 'loopText'] },

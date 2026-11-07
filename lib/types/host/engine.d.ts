@@ -32,6 +32,10 @@ export declare class AutoContinueRunner {
     private readonly ctx;
     private readonly getConfig;
     private readonly states;
+    /** Cached subagent lineage: session id -> direct parent id (undefined when the header has none). */
+    private readonly parents;
+    /** Sessions already identified as subagents, including event views without header metadata. */
+    private readonly subagentSessions;
     private readonly pauseUntil;
     private dayStats;
     private readonly recoveryAttempts;
@@ -81,10 +85,26 @@ export declare class AutoContinueRunner {
     handleNoticeAction(sessionId: SessionId | undefined, action: string): void;
     dispose(): void;
     private state;
-    /** Mark a child session and clear queued grace/cooldown sends. */
-    private markSubagent;
+    /** Record a subagent session's lineage and its parent id when the header carries one. */
+    private noteSubagent;
     /** Read durable origin from the live agent for direct action paths as well. */
     private isSubagent;
+    /** Header origin, cached set or state flag; for paths that only have the session id. */
+    private isSubagentSession;
+    /** Direct parent id, read from the live header when the cache has not seen this session yet. */
+    private parentOf;
+    /** Topmost ancestor of a subagent session: the visible main conversation. */
+    private lineageRoot;
+    /** Explicit session mode stored for this exact id, if the user gave one. */
+    private explicitMode;
+    /** A subagent's mode: its own explicit choice, else the main conversation's choice, else the profile default. */
+    private subagentMode;
+    /** Mark a child session; drop only queued sends that its effective policy no longer allows. */
+    private markSubagent;
+    /** Pause deadline, including the parents' "pause this session 1h" for subagents. */
+    private effectivePauseUntil;
+    /** Whether this session sits below `ancestorId` in the subagent lineage. */
+    private isDescendantOf;
     /**
      * 事件入口(host 单实例): 预处理工具调用/结果/模型消息(护栏与循环信号),
      * 然后交给回合状态机。

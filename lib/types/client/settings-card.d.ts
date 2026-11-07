@@ -15,6 +15,7 @@ export interface AutoContinueSettingsCardState extends CardShell {
     continueText: CardFieldState;
     continueTextMaxTokens: CardFieldState;
     resumeSilentTurns: CardFieldState;
+    resumeSubagentSessions: CardFieldState;
     resumeCompletedTurns: CardFieldState;
     continueTextLoop: CardFieldState;
     continueTextSilent: CardFieldState;

@@ -25,6 +25,8 @@ export declare const AutoContinueSchema: z<Schemastery.ObjectS<{
     continueTextMaxTokens: z<string, string>;
     /** Resume observed model activity that completes without visible output. */
     resumeSilentTurns: z<boolean, boolean>;
+    /** Resume interrupted subagent sessions when their main conversation has auto-continue enabled. Subagents never enter the autonomous loop. */
+    resumeSubagentSessions: z<boolean, boolean>;
     /** Autonomous mode: hand the thread back to the agent after every completed turn, looping until the user stops it. The consecutive-failure cap only throttles failures, never successful completions. */
     resumeCompletedTurns: z<boolean, boolean>;
     /** Text sent to resume a silent turn (same placeholders as `continueText`). */
@@ -92,6 +94,8 @@ export declare const AutoContinueSchema: z<Schemastery.ObjectS<{
     continueTextMaxTokens: z<string, string>;
     /** Resume observed model activity that completes without visible output. */
     resumeSilentTurns: z<boolean, boolean>;
+    /** Resume interrupted subagent sessions when their main conversation has auto-continue enabled. Subagents never enter the autonomous loop. */
+    resumeSubagentSessions: z<boolean, boolean>;
     /** Autonomous mode: hand the thread back to the agent after every completed turn, looping until the user stops it. The consecutive-failure cap only throttles failures, never successful completions. */
     resumeCompletedTurns: z<boolean, boolean>;
     /** Text sent to resume a silent turn (same placeholders as `continueText`). */
@@ -162,6 +166,8 @@ export declare const Config: z<Schemastery.ObjectS<{
     continueTextMaxTokens: z<string, string>;
     /** Resume observed model activity that completes without visible output. */
     resumeSilentTurns: z<boolean, boolean>;
+    /** Resume interrupted subagent sessions when their main conversation has auto-continue enabled. Subagents never enter the autonomous loop. */
+    resumeSubagentSessions: z<boolean, boolean>;
     /** Autonomous mode: hand the thread back to the agent after every completed turn, looping until the user stops it. The consecutive-failure cap only throttles failures, never successful completions. */
     resumeCompletedTurns: z<boolean, boolean>;
     /** Text sent to resume a silent turn (same placeholders as `continueText`). */
@@ -229,6 +235,8 @@ export declare const Config: z<Schemastery.ObjectS<{
     continueTextMaxTokens: z<string, string>;
     /** Resume observed model activity that completes without visible output. */
     resumeSilentTurns: z<boolean, boolean>;
+    /** Resume interrupted subagent sessions when their main conversation has auto-continue enabled. Subagents never enter the autonomous loop. */
+    resumeSubagentSessions: z<boolean, boolean>;
     /** Autonomous mode: hand the thread back to the agent after every completed turn, looping until the user stops it. The consecutive-failure cap only throttles failures, never successful completions. */
     resumeCompletedTurns: z<boolean, boolean>;
     /** Text sent to resume a silent turn (same placeholders as `continueText`). */

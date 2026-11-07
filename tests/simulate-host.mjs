@@ -4,7 +4,15 @@
  *
  * 覆盖场景:
  *   1. turn/end error → 宽限期后 followup 配置的文本
- *   1a. subagent 会话不走实时恢复、手动续跑或 loop guard
+ *   1a. subagent 会话 → 继承主会话的实时恢复(live only), 不进入自主循环、无 loop guard、无启动扫描
+ *   1a.2. 显式 off 的主会话 → 子代理不恢复; 主会话切到 off 取消排队中的子代理续跑
+ *   1a.3. resumeSubagentSessions=false → 子代理不恢复且不可手动续跑, 普通会话不受影响
+ *   1a.4. Resume now 对已启用的 live 子代理有效(普通会话行为不变)
+ *   1a.5. 主会话 loop 模式 → 子代理失败仍恢复, completed 回合不续跑, 子代理自己的 loop 条目不生效
+ *   1a.6. loop guard 仍绝不 cancel/重启子代理(普通会话同场景会被打断)
+ *   1a.7. 暂停父会话 → 取消排队中的子代理续跑并暂停其自动恢复
+ *   1a.8. 嵌套子代理按顶层主会话策略继承(中间节点的 off 不覆盖叶子)
+ *   1a.9. 启动扫描仍跳过子代理会话(live only)
  *   1b. English locale → 默认发送 "Continue"
  *   1c. 本地化只替换默认值, 不覆盖用户自定义文本
  *   1d. 未支持的 locale → 回落中文
@@ -108,9 +116,12 @@ const tmp = mkdtempSync(join(tmpdir(), 'ac-host-test-'));
 mkdirSync(join(tmp, 'pkg'), { recursive: true });
 mkdirSync(join(tmp, 'node_modules', '@deepseek-ai'), { recursive: true });
 for (const pkg of ['cordis', 'schemastery', 'dsh-settings']) {
+  // Junction on Windows: a directory symlink needs admin/Developer Mode there,
+  // while the type argument is ignored on POSIX (plain directory symlink).
   symlinkSync(
     join(root, '../node_modules/@deepseek-ai', pkg),
     join(tmp, 'node_modules/@deepseek-ai', pkg),
+    'junction',
   );
 }
 // bundle 内的 dsh-llm 用 createRequire(import.meta.url) 读 '../package.json',
@@ -124,6 +135,7 @@ if (typeof mod.apply !== 'function') throw new Error('host bundle 未导出 appl
 function makeHost() {
   const sessionHandlers = new Set();
   const inboxInsertedHandlers = new Set();
+  const settingsHandlers = new Set();
   const config = {};
   const registry = new Map();
   const topLevelEffects = [];
@@ -156,11 +168,18 @@ function makeHost() {
     inboxListenerCount() {
       return inboxInsertedHandlers.size;
     },
+    /** Config is mutated in place first; this mirrors the host settings/updated broadcast. */
+    settingsChanged() {
+      for (const handler of settingsHandlers) handler();
+    },
     emit(session, event) {
       for (const h of sessionHandlers) h(session, event);
     },
-    makeAgent(id, { events = [], origin, eventApi = 'legacy', cancel: cancelImpl, queued = [] } = {}) {
-      const session = { id, header: { origin } };
+    makeAgent(id, { events = [], origin, parentSession, eventApi = 'legacy', cancel: cancelImpl, queued = [] } = {}) {
+      const session = {
+        id,
+        header: { origin, ...(parentSession !== undefined ? { parentSession } : {}) },
+      };
       if (eventApi === 'snapshot') {
         session.snapshotEvents = () => Object.freeze([...events]);
       } else {
@@ -259,6 +278,12 @@ function makeHost() {
           return registerEffect(effects, () => {
             inboxInsertedHandlers.add(handler);
             return () => inboxInsertedHandlers.delete(handler);
+          });
+        }
+        if (event === 'settings/updated') {
+          return registerEffect(effects, () => {
+            settingsHandlers.add(handler);
+            return () => settingsHandlers.delete(handler);
           });
         }
         if (event !== 'session/event') return () => {};
@@ -464,39 +489,175 @@ const stepStart = (turn, step, seq) => ({
   time: Date.now(),
   data: { turn, step },
 });
+// 带显式 turn 的可见助手消息(既有 assistantMsg 固定 turn:1, 多回合场景不够用)。
+const assistantTurnMsg = (text, seq, turn = 1) => ({
+  type: 'assistant/message',
+  seq,
+  time: Date.now(),
+  data: {
+    turn,
+    step: 1,
+    message: { role: 'assistant', content: [{ type: 'text', text }] },
+  },
+});
+// 只有内部推理的助手消息: completed 回合据此被判为无可见输出。
+const reasoningOnlyMsg = (seq, turn = 1) => ({
+  type: 'assistant/message',
+  seq,
+  time: Date.now(),
+  data: {
+    turn,
+    step: 1,
+    message: { role: 'assistant', content: [{ type: 'reasoning', text: 'thinking' }] },
+  },
+});
 
-// ---------- 测试 1a: 实时路径完整排除子代理会话 ----------
+// ---------- 测试 1a: subagent 会话 → 继承主会话的实时恢复(live only) ----------
 {
-  console.log('测试 1a: subagent 会话 → 不自动续跑、不手动续跑、不被 loop guard 打断');
-  const host = startPlugin({ scanOnBoot: false, graceMs: 10 });
-  const parent = host.makeAgent('parent');
-  const childError = host.makeAgent('child-error', { origin: 'subagent' });
-  const childTokens = host.makeAgent('child-tokens', { origin: 'subagent' });
+  console.log('测试 1a: 默认开启 → 子代理 error/max-tokens/无可见输出回合均实时恢复');
+  const host = startPlugin({ scanOnBoot: false, graceMs: 10, cooldownMs: 0 });
+  const parent = host.makeAgent('main');
+  const childError = host.makeAgent('child-error', { origin: 'subagent', parentSession: 'main' });
+  const childTokens = host.makeAgent('child-tokens', { origin: 'subagent', parentSession: 'main' });
+  const childSilent = host.makeAgent('child-silent', { origin: 'subagent', parentSession: 'main' });
   await sleep(20);
-  host.emit(parent.session, turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
   host.emit(childError.session, turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
   host.emit(childTokens.session, turnEnd(1, { kind: 'max-tokens' }));
-  await sleep(50);
-  check('普通会话仍可从 error 恢复', parent.followups.length === 1);
-  check('subagent error 不触发实时恢复', childError.followups.length === 0);
-  check('subagent max-tokens 不触发实时恢复', childTokens.followups.length === 0);
+  host.emit(childSilent.session, turnStart(1));
+  host.emit(childSilent.session, reasoningOnlyMsg(5));
+  host.emit(childSilent.session, turnEnd(1, { kind: 'completed' }));
+  await sleep(60);
+  check('子代理 error 实时恢复', childError.followups.length === 1);
+  check('子代理 max-tokens 实时恢复', childTokens.followups.length === 1);
+  check(
+    '子代理无可见输出的 completed 回合实时恢复',
+    childSilent.followups.length === 1 &&
+      childSilent.followups[0]?.content?.[0]?.text?.includes('可见'),
+  );
+  check('父会话未被误触发', parent.followups.length === 0);
   await sleep(20);
+}
 
-  const manualHost = startPlugin({ scanOnBoot: false });
-  const manualChild = manualHost.makeAgent('manual-child', { origin: 'subagent' });
-  const response = await postAction(manualHost, { action: 'resume', sessionId: 'manual-child' });
+// ---------- 测试 1a.2: 显式 off 的主会话 → 子代理不恢复 / 切换 off 取消排队 ----------
+{
+  console.log('测试 1a.2: 显式 off 的主会话 → 子代理不恢复; 主会话切到 off 取消排队续跑');
+  const host = startPlugin({
+    scanOnBoot: false,
+    graceMs: 10,
+    cooldownMs: 0,
+    sessionModes: { 'off-main': 'off' },
+  });
+  host.makeAgent('off-main');
+  const child = host.makeAgent('off-child', { origin: 'subagent', parentSession: 'off-main' });
   await sleep(20);
-  check('subagent 手动 resume 被安全忽略', response.ok === true && manualChild.followups.length === 0);
-  await sleep(20);
+  host.emit(child.session, turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  await sleep(60);
+  check('off 主会话的子代理不实时恢复', child.followups.length === 0);
 
+  const cancelHost = startPlugin({ scanOnBoot: false, graceMs: 200, cooldownMs: 0 });
+  cancelHost.makeAgent('switch-main');
+  const queuedChild = cancelHost.makeAgent('switch-child', {
+    origin: 'subagent',
+    parentSession: 'switch-main',
+  });
+  await sleep(20);
+  cancelHost.emit(
+    queuedChild.session,
+    turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }),
+  );
+  cancelHost.setConfig({ sessionModes: { 'switch-main': 'off' } });
+  cancelHost.settingsChanged();
+  await sleep(350);
+  check('主会话切到 off 后取消已排队的子代理续跑', queuedChild.followups.length === 0);
+  await sleep(20);
+}
+
+// ---------- 测试 1a.3: resumeSubagentSessions=false → 不恢复、不可手动续跑 ----------
+{
+  console.log('测试 1a.3: resumeSubagentSessions=false → 子代理不恢复且不能手动续跑');
+  const host = startPlugin({
+    scanOnBoot: false,
+    graceMs: 10,
+    cooldownMs: 0,
+    resumeSubagentSessions: false,
+  });
+  host.makeAgent('main');
+  const child = host.makeAgent('disabled-child', { origin: 'subagent', parentSession: 'main' });
+  const ordinary = host.makeAgent('ordinary-setting-off');
+  await sleep(20);
+  host.emit(child.session, turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  host.emit(ordinary.session, turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  await sleep(60);
+  check('设置关闭时子代理不实时恢复', child.followups.length === 0);
+  check('设置关闭不影响普通会话', ordinary.followups.length === 1);
+  const response = await postAction(host, { action: 'resume', sessionId: 'disabled-child' });
+  await sleep(20);
+  check('设置关闭时手动 Resume now 被安全忽略', response.ok === true && child.followups.length === 0);
+  await sleep(20);
+}
+
+// ---------- 测试 1a.4: Resume now 对已启用的 live 子代理有效 ----------
+{
+  console.log('测试 1a.4: Resume now → 已启用的 live 子代理收到一次手动续跑');
+  const host = startPlugin({ scanOnBoot: false, graceMs: 10, cooldownMs: 0 });
+  host.makeAgent('main');
+  const child = host.makeAgent('manual-child', { origin: 'subagent', parentSession: 'main' });
+  await sleep(20);
+  const response = await postAction(host, { action: 'resume', sessionId: 'manual-child' });
+  check('Resume now 响应成功', response.ok === true);
+  check('已启用的子代理收到手动续跑', child.followups.length === 1);
+  await sleep(20);
+}
+
+// ---------- 测试 1a.5: 主会话 loop 模式 → 子代理只恢复失败, 不继承自主循环 ----------
+{
+  console.log('测试 1a.5: 主会话 loop 模式 → 子代理失败恢复但 completed 回合不续跑');
+  const host = startPlugin({
+    scanOnBoot: false,
+    graceMs: 10,
+    cooldownMs: 0,
+    loopGuard: false,
+    sessionModes: { 'loop-main': 'loop', 'loop-child': 'loop' },
+  });
+  host.makeAgent('loop-main');
+  const inherited = host.makeAgent('loop-inherited', {
+    origin: 'subagent',
+    parentSession: 'loop-main',
+  });
+  const explicit = host.makeAgent('loop-child', { origin: 'subagent', parentSession: 'loop-main' });
+  await sleep(20);
+  host.emit(inherited.session, turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  await sleep(60);
+  check('loop 主会话下子代理失败仍恢复', inherited.followups.length === 1);
+  host.emit(inherited.session, turnStart(2));
+  host.emit(inherited.session, assistantTurnMsg('done', 15, 2));
+  host.emit(inherited.session, turnEnd(2, { kind: 'completed' }));
+  host.emit(explicit.session, turnStart(1));
+  host.emit(explicit.session, assistantTurnMsg('done', 5, 1));
+  host.emit(explicit.session, turnEnd(1, { kind: 'completed' }));
+  await sleep(60);
+  check('循环模式下子代理的 completed 回合不自动续跑', inherited.followups.length === 1);
+  check('子代理自己的 loop 条目也不启动自主循环', explicit.followups.length === 0);
+  host.emit(explicit.session, turnEnd(2, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  await sleep(60);
+  check('显式 loop 子代理的失败仍恢复', explicit.followups.length === 1);
+  await sleep(20);
+}
+
+// ---------- 测试 1a.6: loop guard 仍绝不打断子代理 ----------
+{
+  console.log('测试 1a.6: loop guard 不 cancel 或续跑 subagent(普通会话同场景会被打断)');
   let loopChild;
   const loopHost = startPlugin({ scanOnBoot: false, loopRepeatText: 2, graceMs: 10, cooldownMs: 0 });
-  loopChild = loopHost.makeAgent('loop-child', {
+  loopHost.makeAgent('loop-parent');
+  loopChild = loopHost.makeAgent('loop-guard-child', {
     origin: 'subagent',
+    parentSession: 'loop-parent',
     cancel(cause) {
       loopHost.emit(loopChild.session, turnEnd(1, { kind: 'aborted', reason: cause }));
     },
   });
+  const ordinary = loopHost.makeAgent('loop-guard-ordinary');
   await sleep(20);
   // Exercise interruptLoop's direct origin guard even if this event view lacks header metadata.
   const loopEventSession = { ...loopChild.session, header: {} };
@@ -504,9 +665,110 @@ const stepStart = (turn, step, seq) => ({
   const repeated = 'Repeated child output that should never reach the loop guard.';
   loopHost.emit(loopEventSession, assistantMsg(repeated, 10));
   loopHost.emit(loopEventSession, assistantMsg(repeated, 11));
+  // 同一 host 的普通会话用同样的重复消息, 证明此配置的 loop guard 确实会打断。
+  loopHost.emit(ordinary.session, turnStart(1));
+  loopHost.emit(ordinary.session, assistantMsg(repeated, 10));
+  loopHost.emit(ordinary.session, assistantMsg(repeated, 11));
   await sleep(50);
-  check('loop guard 不 cancel 或续跑 subagent', loopChild.cancels.length === 0 && loopChild.followups.length === 0);
+  check(
+    'loop guard 不 cancel 或续跑 subagent',
+    loopChild.cancels.length === 0 && loopChild.followups.length === 0,
+  );
+  check('同一配置下普通会话仍被 loop guard 打断', ordinary.cancels.length === 1);
   await sleep(20);
+}
+
+// ---------- 测试 1a.7: 暂停父会话 → 取消排队子代理续跑并暂停其自动恢复 ----------
+{
+  console.log('测试 1a.7: 暂停父会话 → 取消排队中的子代理续跑并暂停自动恢复');
+  const host = startPlugin({ scanOnBoot: false, graceMs: 200, cooldownMs: 0 });
+  host.makeAgent('pause-main');
+  const child = host.makeAgent('pause-child', { origin: 'subagent', parentSession: 'pause-main' });
+  await sleep(20);
+  host.emit(child.session, turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  const paused = await postAction(host, { action: 'pause1h', sessionId: 'pause-main' });
+  await sleep(350);
+  check('暂停父会话取消排队中的子代理续跑', paused.ok === true && child.followups.length === 0);
+  host.emit(child.session, turnEnd(2, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  await sleep(100);
+  check('父会话暂停期间子代理不自动恢复', child.followups.length === 0);
+  await sleep(20);
+}
+
+// ---------- 测试 1a.8: 嵌套子代理按顶层主会话策略继承 ----------
+{
+  console.log('测试 1a.8: 嵌套子代理 → 继承顶层主会话策略, 中间节点的 off 不覆盖叶子');
+  const host = startPlugin({ scanOnBoot: false, graceMs: 10, cooldownMs: 0 });
+  host.makeAgent('top');
+  host.makeAgent('mid', { origin: 'subagent', parentSession: 'top' });
+  const leaf = host.makeAgent('leaf', { origin: 'subagent', parentSession: 'mid' });
+  await sleep(20);
+  host.emit(leaf.session, turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  await sleep(60);
+  check('嵌套子代理默认继承顶层主会话的启用策略', leaf.followups.length === 1);
+
+  const offHost = startPlugin({
+    scanOnBoot: false,
+    graceMs: 10,
+    cooldownMs: 0,
+    sessionModes: { top: 'off' },
+  });
+  offHost.makeAgent('top');
+  offHost.makeAgent('mid', { origin: 'subagent', parentSession: 'top' });
+  const offLeaf = offHost.makeAgent('leaf', { origin: 'subagent', parentSession: 'mid' });
+  await sleep(20);
+  offHost.emit(offLeaf.session, turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }));
+  await sleep(60);
+  check('顶层主会话 off → 嵌套子代理不恢复', offLeaf.followups.length === 0);
+
+  const midOffHost = startPlugin({
+    scanOnBoot: false,
+    graceMs: 10,
+    cooldownMs: 0,
+    sessionModes: { mid: 'off' },
+  });
+  midOffHost.makeAgent('top');
+  midOffHost.makeAgent('mid', { origin: 'subagent', parentSession: 'top' });
+  const leafUnderMidOff = midOffHost.makeAgent('leaf', {
+    origin: 'subagent',
+    parentSession: 'mid',
+  });
+  await sleep(20);
+  midOffHost.emit(
+    leafUnderMidOff.session,
+    turnEnd(1, { kind: 'error', error: { code: 'UPSTREAM', message: 'boom' } }),
+  );
+  await sleep(60);
+  check('中间子代理的 off 条目不覆盖叶子(仍继承顶层默认)', leafUnderMidOff.followups.length === 1);
+  await sleep(20);
+}
+
+// ---------- 测试 1a.9: 启动扫描仍跳过子代理会话 ----------
+{
+  console.log('测试 1a.9: 启动扫描仍跳过子代理会话(live only)');
+  const now = Date.now();
+  const host = makeHost();
+  host.makeAgent('boot-main');
+  const child = host.makeAgent('boot-child', {
+    eventApi: 'snapshot',
+    origin: 'subagent',
+    parentSession: 'boot-main',
+    events: [
+      { type: 'turn/end', seq: 2, time: now - 60_000, data: { turn: 1, reason: { kind: 'interrupted' } } },
+    ],
+  });
+  const ordinary = host.makeAgent('boot-ordinary', {
+    eventApi: 'snapshot',
+    events: [
+      { type: 'turn/end', seq: 2, time: now - 60_000, data: { turn: 1, reason: { kind: 'interrupted' } } },
+    ],
+  });
+  host.setConfig({ ...FAST, scanOnBoot: true });
+  mod.apply(host.ctx, host.configValue());
+  await sleep(1000);
+  check('启动扫描仍不恢复子代理会话', child.followups.length === 0);
+  check('启动扫描仍恢复普通会话', ordinary.followups.length === 1);
+  await sleep(50);
 }
 
 // ---------- 测试 1: turn/end error → 宽限期后自动发送 ----------
